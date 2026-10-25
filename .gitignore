@@ -1,0 +1,4 @@
+.env
+.sim-key
+node_modules
+.vercel

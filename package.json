@@ -1,0 +1,12 @@
+{
+  "name": "clear-sim",
+  "version": "1.0.0",
+  "description": "Signed transaction simulation for hardware wallets",
+  "license": "MIT",
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "start": "node server.ts",
+    "test": "node --test test/"
+  }
+}
