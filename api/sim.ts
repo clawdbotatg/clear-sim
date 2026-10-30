@@ -182,9 +182,30 @@ export function text(nonce: string, chain: number, tx: string, block: number, ok
   return ["clear-sim v1", nonce, chain, tx, block, ok, ...list.map((c) => [c.token, c.symbol, c.decimals, c.amount, c.usd].join(","))].join("\n");
 }
 
-/** sha256 hex of "<from>\n<to>\n<value>\n<data>": the wallet works it out from what it's asked to sign. */
-export const txHash = (from: string, to: string, value: bigint, data: string) =>
-  createHash("sha256").update(`${from}\n${to}\n${value}\n${data}`).digest("hex");
+/** sha256 hex of "<from>\n<to>\n<value>\n<data>" (and "\n1" for a delegatecall): the wallet works it out from what
+ *  it's asked to sign. */
+export const txHash = (from: string, to: string, value: bigint, data: string, operation = 0) =>
+  createHash("sha256").update(`${from}\n${to}\n${value}\n${data}${operation ? "\n1" : ""}`).digest("hex");
+
+const word = (h: string) => h.replace(/^0x/, "").padStart(64, "0");
+/**
+ * A delegatecall from a Safe (a MultiSend batch, operation 1), run the way it really runs: the Safe's own
+ * execTransaction, called by one of its owners with an approved-by-caller signature (v = 1), the threshold set to 1
+ * for this run only (storage slot 4). So every call in the batch comes from the Safe, and the Safe can take ETH back.
+ * Not a Safe (no owners): Bad.
+ */
+async function safeRun(s: Setup, url: string, at: string, safe: string, to: string, value: bigint, data: string) {
+  const owners: string = await rpc(s, url, "eth_call", [{ to: safe, data: "0xa0e67e2b" }, at]).catch(() => "0x");   // getOwners()
+  if (!hex(owners) || owners.length < 2 + 64 * 3) throw new Bad("operation 1: from must be a Safe");
+  const owner = "0x" + owners.slice(2 + 64 * 2 + 24, 2 + 64 * 3);
+  const d = data.slice(2), pad = (h: string) => h + "0".repeat((64 - (h.length % 64)) % 64);
+  const sig = word(owner) + word("0") + "01";                                    // r = the owner, s = 0, v = 1
+  const dataAt = 10 * 32, sigAt = dataAt + 32 + pad(d).length / 2;
+  const call = "0x6a761202" + word(to) + word(value.toString(16)) + word(dataAt.toString(16)) + word("1") + word("0") + word("0") + word("0")
+    + word("0") + word("0") + word(sigAt.toString(16)) + word((d.length / 2).toString(16)) + pad(d) + word("41") + pad(sig);
+  return [{ from: owner, to: safe, value: "0x0", data: call }, at,
+    { tracer: "callTracer", tracerConfig: { withLog: true }, stateOverrides: { [safe]: { stateDiff: { ["0x" + word("4")]: "0x" + word("1") } } } }];
+}
 
 /** Run one request body. Throws Bad. */
 export async function simulate(s: Setup, b: any) {
@@ -196,14 +217,18 @@ export async function simulate(s: Setup, b: any) {
   if (!/^[0-9a-f]{32}$/.test(b?.nonce || "")) throw new Bad("nonce: 32 lowercase hex");
   if ((b.sig ?? "p256") !== "p256") throw new Bad("sig: only p256 for now");
   if (b.block !== undefined && !/^\d{1,12}$/.test(String(b.block))) throw new Bad("block: a decimal number");
+  if (![undefined, 0, 1].includes(b.operation)) throw new Bad("operation: 0 (call) or 1 (delegatecall)");
+  const op = b.operation === 1 ? 1 : 0;
   const value = BigInt(b.value);
   let block: number, trace: any;
   try {
     const head = Number(await rpc(s, url, "eth_blockNumber", []));
     block = b.block === undefined ? head : Number(b.block);
     if (block > head) throw new Bad("block: not mined yet");
-    trace = await rpc(s, url, "debug_traceCall", [{ from, to, value: "0x" + value.toString(16), data }, "0x" + block.toString(16),
-      { tracer: "callTracer", tracerConfig: { withLog: true } }]);
+    const at = "0x" + block.toString(16);
+    trace = await rpc(s, url, "debug_traceCall", op
+      ? await safeRun(s, url, at, from, to, value, data)
+      : [{ from, to, value: "0x" + value.toString(16), data }, at, { tracer: "callTracer", tracerConfig: { withLog: true } }]);
   } catch (e) {
     throw e instanceof Bad ? e : new Bad("can't simulate right now", 502);
   }
@@ -215,7 +240,7 @@ export async function simulate(s: Setup, b: any) {
     const m = t === "eth" ? { symbol: COIN[chain] || "ETH", decimals: 18 } : await meta(s, chain, t);
     list.push({ token: t, symbol: m.symbol, decimals: m.decimals, amount: n.toString(), usd: usd(n, m.decimals, t === "eth" ? px.eth : px.tokens[t]) });
   }
-  const tx = txHash(from, to, value, data);
+  const tx = txHash(from, to, value, data, op);
   const sig = sign("sha256", Buffer.from(text(b.nonce, chain, tx, block, ok, list)), { key: s.key, dsaEncoding: "ieee-p1363" });
   return { block, ok, tx, changes: list, nonce: b.nonce, sig: "p256", r: sig.subarray(0, 32).toString("hex"), s: sig.subarray(32).toString("hex") };
 }

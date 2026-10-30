@@ -11,6 +11,7 @@
 | `value` | wei, a decimal string |
 | `data` | calldata, hex (up to 200,000 chars) |
 | `nonce` | 32 lowercase hex, picked by the wallet: an old answer can't be replayed |
+| `operation` | optional: `0` (a call, the default) or `1` (a delegatecall from a Safe, as it runs a MultiSend batch: simulated as the Safe's own `execTransaction`, called by one of its owners) |
 | `block` | optional: simulate at this block. Default: the latest. Several simulators at one block give identical answers |
 | `sig` | optional: the signature scheme the wallet can check. Only `p256` (the default) |
 
@@ -22,7 +23,7 @@
 |---|---|
 | `block` | the block it ran on |
 | `ok` | `ok` or `reverts` (then `changes` is empty) |
-| `tx` | sha256 hex of `<from>\n<to>\n<value>\n<data>`, all lowercase, value in decimal |
+| `tx` | sha256 hex of `<from>\n<to>\n<value>\n<data>`, all lowercase, value in decimal; with `\n1` after it for operation 1 |
 | `changes` | the sender's net change per token: `token` (`eth` = the chain's coin, else the token's address), `symbol` (`?` if the token won't say, or says something odd), `decimals` (-1 if unknown), `amount` (raw units, signed, `-` = out), `usd` (the whole change in dollars, 2 decimals, `""` = no price) |
 | `nonce`, `sig` | as asked |
 | `r`, `s` | the signature, 64 hex each |
